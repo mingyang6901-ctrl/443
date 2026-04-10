@@ -1,0 +1,144 @@
+---
+title: "Untitled"
+output: html_document
+date: "2026-03-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# train data
+climate_train <- read.csv("DailyDelhiClimateTrain.csv")
+climate_train$date <- as.Date(climate_train$date)
+head(climate_train)
+```
+
+```{r}
+library(tidyverse)
+library(forecast)
+```
+
+```{r}
+ts_temp <- ts(climate_train$meantemp, frequency = 365)
+```
+
+```{r}
+fit_auto <- auto.arima(ts_temp, seasonal = TRUE) # ARIMA(3,1,1)(0,1,0)[365] 
+fit_auto
+
+# model1 <- arima(ts_temp,
+#                 order = c(0,0,1),
+#                seasonal = list(order = c(0,1,1), period = 365),
+#                method = "ML",
+#                include.mean = FALSE)
+# maximum supported lag is 350
+```
+
+先用holt winters deal with large seasonality 再看小seasonality
+```{r}
+hw_model <- HoltWinters(ts_temp, seasonal = "additive")
+hw_resid <- residuals(hw_model)
+plot(hw_resid)
+
+par(mfrow = c(2, 2))
+acf(hw_resid)
+pacf(hw_resid)
+acf(hw_resid, lag.max = 800)
+pacf(hw_resid, lag.max = 800)
+```
+
+```{r}
+arma_auto <- auto.arima(hw_resid, seasonal = FALSE)
+arma_auto
+```
+
+```{r}
+# MA
+arma1 <- arima(hw_resid, order = c(0,0,1), include.mean = FALSE)
+arma2 <- arima(hw_resid, order = c(0,0,2), include.mean = FALSE)
+arma3 <- arima(hw_resid, order = c(0,0,3), include.mean = FALSE)
+arma4 <- arima(hw_resid, order = c(0,0,4), include.mean = FALSE)
+arma5 <- arima(hw_resid, order = c(0,0,6), include.mean = FALSE)
+
+# AR
+arma6 <- arima(hw_resid, order = c(1,0,0), include.mean = FALSE)
+arma7 <- arima(hw_resid, order = c(2,0,0), include.mean = FALSE)
+
+# mixed
+arma8 <- arima(hw_resid, order = c(1,0,1), include.mean = FALSE)
+arma9 <- arima(hw_resid, order = c(1,0,5), include.mean = FALSE)
+arma10 <- arima(hw_resid, order = c(3,0,3), include.mean = FALSE)
+arma11 <- arima(hw_resid, order = c(3,1,3), include.mean = FALSE)
+arma12 <- arima(hw_resid, order = c(2,0,5), include.mean = FALSE)
+arma13 <- arima(hw_resid, order = c(2,1,5), include.mean = FALSE)
+arma14 <- arima(hw_resid, order = c(3,0,5), include.mean = FALSE)
+arma15 <- arima(hw_resid, order = c(3,0,4), include.mean = FALSE)
+
+# AIC(arma_auto, arma1, arma2, arma3, arma4, arma5, arma6, arma7, arma8, arma9)
+# AIC(arma10, arma11)
+```
+
+```{r}
+# test data
+climate_test <- read.csv("DailyDelhiClimateTest.csv")
+climate_test$date <- as.Date(climate_test$date)
+
+# training and holdout response
+y_train <- climate_train$meantemp
+y_test  <- climate_test$meantemp
+
+n_test <- length(y_test)
+fc_hybrid <- numeric(n_test)
+# put models into a list
+arma_list <- list(
+  arma1 = arma1, arma2 = arma2, arma3 = arma3, arma4 = arma4, arma5 = arma5,
+  arma6 = arma6, arma7 = arma7, arma8 = arma8, arma9 = arma9, arma10 = arma10,
+  arma11 = arma11, arma12 = arma12, arma13 = arma13, arma14 = arma14, arma15 = arma15, arma16=arma_auto)
+
+rmse_results <- numeric(length(arma_list))
+names(rmse_results) <- names(arma_list)
+
+for (m in names(arma_list)) {
+  
+  fc_hybrid <- numeric(n_test)
+  
+  for (i in 1:n_test) {
+    y_hist <- c(y_train, y_test[1:(i - 1)])
+    y_hist_ts <- ts(y_hist, frequency = 365)
+    
+    # Holt-Winters
+    hw_refit <- HoltWinters(y_hist_ts, seasonal = "additive")
+    hw_fc <- predict(hw_refit, n.ahead = 1)[1]
+    
+    # residuals
+    resid_hist <- as.numeric(residuals(hw_refit))
+    
+    # ARMA model - refit model
+    arma_refit <- Arima(resid_hist, model = arma_list[[m]])
+    resid_fc <- forecast(arma_refit, h = 1)$mean[1]
+    
+    fc_hybrid[i] <- hw_fc + resid_fc
+  }
+  
+  rmse_results[m] <- sqrt(mean((y_test - fc_hybrid)^2))
+}
+
+sort(rmse_results)
+```
+
+选arma12: arima(2,0,5)
+
+```{r}
+summary(hw_model)
+```
+
+```{r}
+summary(arma12)
+```
+
+
+
+
+

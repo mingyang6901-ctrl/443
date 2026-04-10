@@ -1,0 +1,161 @@
+---
+title: "STAT443 project"
+author: "Amy Chen"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(forecast)
+# Load the training and test datasets
+train <- read.csv("DailyDelhiClimateTrain (1).csv")
+test <- read.csv("DailyDelhiClimateTest (1).csv")
+
+# Convert date
+train$date <- as.Date(train$date)
+test$date  <- as.Date(test$date)
+
+# Create Time Series objects for the daily mean temperature
+train_ts <- ts(train$meantemp, start=c(2013, 1), frequency=365)
+test_ts  <- ts(test$meantemp, start=c(2017, 1), frequency=365)
+```
+
+
+```{r}
+# 1. Average (IID)
+mean_val <- mean(train_ts)
+mean_fc <- rep(mean_val, length(test_ts))
+rmse_mean <- sqrt(mean((test_ts - mean_fc)^2))
+
+
+# 2. Persistence (Moving 1-step)
+persist_fc <- numeric(length(test_ts))
+persist_fc[1] <- tail(train_ts, 1)
+for (i in 2:length(test_ts)) {
+  persist_fc[i] <- test_ts[i-1]
+}
+rmse_persist <- sqrt(mean((test_ts - persist_fc)^2))
+
+
+# 3. Simple Exponential Smoothing (Moving 1-step)
+full_ts <- ts(c(train$meantemp, test$meantemp))
+ses_train <- HoltWinters(train_ts, beta = FALSE, gamma = FALSE)
+ses_full <- HoltWinters(full_ts,
+                        alpha = ses_train$alpha,
+                        beta = FALSE,
+                        gamma = FALSE)
+ses_moving_fc <- window(fitted(ses_full)[, "xhat"],
+                        start = length(train_ts) + 1)
+rmse_ses_moving <- sqrt(mean((as.numeric(test_ts) - as.numeric(ses_moving_fc))^2))
+
+
+# 4. Additive Seasonal Exponential Smoothing (Moving 1-step)
+full_ts <- ts(c(train$meantemp, test$meantemp), frequency = 365)
+hw_train <- HoltWinters(train_ts, seasonal = "additive")
+hw_full <- HoltWinters(full_ts,
+                       alpha = hw_train$alpha,
+                       beta  = hw_train$beta,
+                       gamma = hw_train$gamma,
+                       seasonal = "additive")
+hw_moving_fc <- tail(fitted(hw_full)[, "xhat"], length(test_ts))
+rmse_hw_moving <- sqrt(mean((as.numeric(test_ts) - as.numeric(hw_moving_fc))^2))
+
+
+# 5. Compare RMSE of all models
+results <- data.frame(
+  Model = c("Mean (IID)", "Persistence", "SES (1-step moving)", "Holt-Winters (Additive)"),
+  RMSE  = c(rmse_mean, rmse_persist, rmse_ses_moving, rmse_hw_moving)
+)
+print(results)
+```
+
+
+```{r}
+# Compare all models' TS plots with Forecast v.s Actual
+iid_fc_ts       <- ts(mean_fc, start=start(test_ts), frequency=frequency(test_ts))
+persist_fc_ts   <- ts(persist_fc, start=start(test_ts), frequency=frequency(test_ts))
+ses_fc_ts       <- ts(ses_moving_fc, start=start(test_ts), frequency=frequency(test_ts))
+hw_fc_ts        <- ts(hw_moving_fc, start=start(test_ts), frequency=frequency(test_ts))
+
+
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+
+plot(test_ts, main="IID Mean", 
+     ylab="Mean Temp (°C)", xlab="Time (2017)", lwd=2)
+lines(iid_fc_ts, col="red", lwd=2, lty=2)
+legend("topleft", legend=c("Actual Test Data", "Forecast"), 
+       col=c("black", "red"), lty=c(1,2), lwd=2, bty="n")
+
+
+plot(test_ts, main="Persistence", 
+     ylab="Mean Temp (°C)", xlab="Time (2017)", lwd=2)
+lines(persist_fc_ts, col="red", lwd=2, lty=2)
+legend("topleft", legend=c("Actual Test Data", "Forecast"), 
+       col=c("black", "red"), lty=c(1,2), lwd=2, bty="n")
+
+
+plot(test_ts, main="SES (1-step)", 
+     ylab="Mean Temp (°C)", xlab="Time (2017)", lwd=2)
+lines(ses_fc_ts, col="red", lwd=2, lty=2)
+legend("topleft", legend=c("Actual Test Data", "Forecast"), 
+       col=c("black", "red"), lty=c(1,2), lwd=2, bty="n")
+
+
+plot(test_ts, main="Holt-Winters (Additive)", 
+     ylab="Mean Temp (°C)", xlab="Time (2017)", lwd=2)
+lines(hw_fc_ts, col="red", lwd=2, lty=2)
+legend("topleft", legend=c("Actual Test Data", "Forecast"), 
+       col=c("black", "red"), lty=c(1,2), lwd=2, bty="n")
+```
+
+```{r}
+ses_residuals <- as.numeric(test_ts) - as.numeric(ses_moving_fc)
+acf(ses_residuals, 
+    main = "ACF of SES (1-step) Residuals")
+```
+
+
+```{r}
+# Summary Statistics
+vars <- c("meantemp", "humidity", "wind_speed", "meanpressure")
+cat("--- Basic Summary Statistics ---\n")
+print(summary(train[, vars]))
+cat("\n--- Standard Deviations ---\n")
+print(sapply(train[, vars], sd, na.rm=TRUE))
+```
+
+```{r}
+# Visual Diagnostics: Time Series Plot
+plot(train_ts, 
+     main="Daily Mean Temperature in Delhi (2013 - 2017)", 
+     ylab="Mean Temperature (°C)", 
+     xlab="Time (Years)", 
+     xlim=c(2013, 2017.4), 
+     ylim=c(0, 50), 
+     lwd=1)
+lines(test_ts, col="red", lwd=2)
+legend("topleft", 
+       legend=c("Training Set", "Test Set (Jan-Apr 2017)"), 
+       col=c("black", "red"), 
+       lty=1, 
+       lwd=c(1,2), 
+       bty="n", 
+       cex=0.9)
+
+
+# Visual Diagnostics: ACF Plot
+acf(train_ts, 
+    lag.max=730, 
+    main="ACF of Daily Mean Temperature (Training Data)",
+    xlab="Lag (Years)", 
+    ylab="Autocorrelation",
+    col=rgb(0, 0, 0, alpha=0.5))
+```
+

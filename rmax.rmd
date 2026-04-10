@@ -1,0 +1,274 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r}
+library(forecast)
+armax_fc = function(tsdata,ntrain,order,method,traincoef,include.mean,xreg,
+                    iprint=F){
+              
+              obj <<-arima(tsdata,order=order,init=traincoef,fixed=traincoef,
+              # next line for debugging, after debugging, replace with above line
+              # obj <<- arima(tsdata,order=order,init=traincoef,fixed=traincoef,
+              method=method, include.mean=include.mean, xreg=xreg,
+              optim.control=list(maxit=0))
+              # yt = y_{t|t-1} + innov ; fc = yt-innov
+              fc = tsdata- obj$residuals
+              
+              ntotal = length(tsdata)
+              holdout_fc = fc[(ntrain+1):ntotal]
+              holdout = tsdata[(ntrain+1):ntotal]
+              
+              if(iprint) print(cbind(holdout,holdout_fc))
+              rmse = sqrt(mean((holdout-holdout_fc)^2))
+              list(rmse=rmse, fc=holdout_fc)
+              }
+
+arima_fc = function(tsdata,ntrain,order,method,traincoef,include.mean,
+                    iprint=F){
+  
+  obj <<-arima(tsdata,order=order,init=traincoef,fixed=traincoef,
+               # next line for debugging, after debugging, replace with above line
+               # obj <<- arima(tsdata,order=order,init=traincoef,fixed=traincoef,
+               method=method, include.mean=include.mean,
+               optim.control=list(maxit=0))
+  # yt = y_{t|t-1} + innov ; fc = yt-innov
+  fc = tsdata- obj$residuals
+  
+  ntotal = length(tsdata)
+  holdout_fc = fc[(ntrain+1):ntotal]
+  holdout = tsdata[(ntrain+1):ntotal]
+  
+  if(iprint) print(cbind(holdout,holdout_fc))
+  rmse = sqrt(mean((holdout-holdout_fc)^2))
+  list(rmse=rmse, fc=holdout_fc)
+}
+
+```
+
+
+```{r}
+train = read.csv("DailyDelhiClimateTrain.csv")
+test = read.csv("DailyDelhiClimateTest.csv")
+
+y_train = ts(train$meantemp, frequency = 365, start=c(2013,1))
+x1_train = ts(train$humidity, frequency = 365, start=c(2013,1))
+x2_train = ts(train$wind_speed, frequency = 365, start=c(2013,1))
+x3_train = ts(train$meanpressure, frequency = 365, start=c(2013,1))
+
+y_test = ts(test$meantemp, frequency = 365, start=c(2017,1))
+x1_test = ts(test$humidity, frequency = 365, start=c(2017,1))
+x2_test = ts(test$wind_speed, frequency = 365, start=c(2017,1))
+x3_test = ts(test$meanpressure, frequency = 365, start=c(2017,1))
+
+library(forecast)
+y_diff <- diff(y_train)
+plot(y_train)
+plot(y_diff)
+
+acf(y_diff, main = "ACF of meantemp after differencing")
+acf(y_train, main = "ACF of meantemp before differencing")
+pacf(y_train, main = "PACF of meantemp before diff")
+pacf(y_diff, main = "PACF of meantemp after diff")
+
+ccf(y_diff, x1_train, main = "CCF between y and x1")
+ccf(y_diff, x2_train, main = "CCF between y and x2")
+ccf(y_diff, x3_train, main = "CCF between y and x3")
+
+ccf(y_train, x1_train, main = "CCF between y and x1")
+ccf(y_train, x2_train, main = "CCF between y and x2")
+ccf(y_train, x3_train, main = "CCF between y and x3")
+```
+#suggested practice: 
+#no seasonality, do ARIMAX, possible ARIMA terms in residuals
+
+```{r}
+total = rbind(train,test)
+df2 = data.frame("y" = total$meantemp, "x1" = total$humidity,"x2" = total$wind_speed,"x3" = total$meanpressure)
+ntotal = 1575
+ntrain = 1462
+
+df_lag1regression = data.frame(
+  y= df2$y[2:(ntotal)],
+  x1prev=df2$x1[1:(ntotal-1)],
+  x2prev=df2$x2[1:(ntotal-1)],
+  x3prev=df2$x3[1:(ntotal-1)]
+  )
+
+#regression_fit on the training set
+reg1 = lm(y~ x1prev+x2prev+x3prev, data=df_lag1regression[1:(ntrain),])
+print(summary(reg1))
+
+#x3 coeffecients is not significant, dropping the term
+reg2 = lm(y~ x1prev+x2prev, data=df_lag1regression[1:(ntrain),])
+print(summary(reg2))
+
+#residuals reg1
+resid_reg1 = reg1$residuals
+plot.ts(resid_reg1)
+acf(resid_reg1)
+pacf(resid_reg1)
+
+plot.ts(diff(resid_reg1))
+acf(diff(resid_reg1))
+pacf(diff(resid_reg1))
+
+resid1_auto = auto.arima(resid_reg1)
+print(resid1_auto)
+
+#residuals reg2
+resid_reg2 = reg2$residuals
+plot.ts(resid_reg2)
+acf(resid_reg2)
+pacf(resid_reg2)
+
+plot.ts(diff(resid_reg2))
+acf(diff(resid_reg2))
+pacf(diff(resid_reg2))
+
+resid2_auto = auto.arima(resid_reg2)
+print(resid2_auto)
+```
+
+#Using 2 regressors suggest regressing on previous X1, X2, with ARIMA(2,1,2) residual
+
+
+#refitting the ARIMAX model: using previous X1 and X2, and ARIMA(2,1,1) residual
+```{r}
+train_arx = arima(
+                df_lag1regression$y[1:ntrain], 
+                order=c(2,1,2), 
+                method="CSS",
+                include.mean=T, 
+                xreg=cbind(df_lag1regression$x1[1:ntrain],df_lag1regression$x2[1:ntrain])
+                )
+
+print(train_arx)
+
+
+#Additional Tries:
+#Using sinusoid trend terms
+day=c(1:1462)
+day_test=c(1:114)
+
+train_df = data.frame(y=df_lag1regression$y[1:ntrain], day=c(1:1462),
+                      cosine=cos(2*pi*day/365), sine=sin(2*pi*day/365))
+holdout_df = data.frame(y=test$meantemp, day=c(1:114),
+                        cosine=cos(2*pi*day_test/365), sine=sin(2*pi*day_test/365))
+reg_sinusoid = lm(y~ cosine+sine, data=train_df)
+
+
+summary(reg_sinusoid)
+resid = reg_sinusoid$residuals
+resid_auto = auto.arima(resid)
+print(resid_auto)
+
+#test RMSE
+pred_holdout = predict(reg_sinusoid,newdata=holdout_df)
+resid_holdout = test$meantemp-pred_holdout
+
+residuals_total = c(reg_sinusoid$residuals,resid_holdout)
+
+sinusoid_result = arima_fc(residuals_total,1462,order = c(2,1,1),"CSS",include.mean = T,resid_auto$coef)
+sinusoid_result$rmse
+
+plot(y_test[1:112], type = "l", col = "blue", lwd = 2,
+     main = "Prediction vs True Test Values",
+     ylab = "Value", xlab = "Time")
+
+lines(sinusoid_result$fc + pred_holdout, col = "red", lwd = 2)
+
+legend("topleft",
+       legend = c("True", "Predicted"),
+       col = c("blue", "red"),
+       lwd = 2)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Using mixing terms
+df_lag1_mixed_regression = data.frame(
+  y= df2$y[2:(ntotal)],
+  x1prev=df2$x1[1:(ntotal-1)],
+  x2prev=df2$x2[1:(ntotal-1)],
+  x3prev=df2$x3[1:(ntotal-1)],
+  X1X2  =df2$x1[1:(ntotal-1)] * df2$x2[1:(ntotal-1)],
+  X1X3  =df2$x1[1:(ntotal-1)] * df2$x3[1:(ntotal-1)]
+)
+
+#regression_fit on the training set
+reg_mixed = lm(y~ x1prev+x2prev+x3prev+X1X2+X1X3, data=df_lag1_mixed_regression[1:(ntrain),])
+print(summary(reg_mixed))
+
+reg_mixed_2 = lm(y~ x1prev+x3prev+X1X3, data=df_lag1_mixed_regression[1:(ntrain),])
+print(summary(reg_mixed_2))
+
+resid3_auto = auto.arima(reg_mixed_2$residuals)
+print(resid2_auto)
+
+train_arx_mixed = arima(
+  df_lag1_mixed_regression$y[1:ntrain], 
+  order=c(2,1,2), 
+  method="CSS",
+  include.mean=T, 
+  xreg=cbind(df_lag1_mixed_regression$x1[1:ntrain],df_lag1_mixed_regression$x3[1:ntrain],df_lag1_mixed_regression$X1X3[1:ntrain])
+)
+
+print(train_arx_mixed)
+armax_result_mixed = armax_fc(
+                        df_lag1_mixed_regression$y,
+                        ntrain = ntrain, 
+                        order = c(2,1,2),
+                        method = "CSS",
+                        traincoef = train_arx_mixed$coef,
+                        include.mean = T,
+                        xreg =cbind(
+                          df_lag1_mixed_regression$x1prev,
+                          df_lag1_mixed_regression$x3prev,
+                          df_lag1_mixed_regression$X1X3))
+
+pred_xreg_mixed = armax_result_mixed$fc
+testrmse_mixed  = armax_result_mixed$rmse
+print(testrmse_mixed)
+
+
+
+
+
+
+
+
+
+
+
+
+#print predictions and test rmse
+armax_result = armax_fc(
+        df_lag1regression$y,ntrain = ntrain, order = c(2,1,2),method = "CSS",
+         traincoef = train_arx$coef,include.mean = T,xreg =cbind(df_lag1regression$x1prev,df_lag1regression$x2prev))
+
+pred_xreg = armax_result$fc
+testrmse  = armax_result$rmse
+print(testrmse)
+
+plot(y_test[1:112], type = "l", col = "blue", lwd = 2,
+     main = "Prediction vs True Test Values",
+     ylab = "Value", xlab = "Time")
+
+lines(armax_result$fc, col = "red", lwd = 2)
+
+legend("topleft",
+       legend = c("True", "Predicted"),
+       col = c("blue", "red"),
+       lwd = 2)
